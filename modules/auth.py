@@ -144,6 +144,84 @@ def _formatear_tiempo(segundos: int) -> str:
     return f"{seg} s"
 
 
+@st.fragment(run_every=1)
+def _render_reloj_bloqueo(clave_estado: str, subtitulo: str):
+    """Renderiza un cronómetro digital en vivo (1 seg) durante el bloqueo Anti-DDoS."""
+    restante = max(0, int(st.session_state.get(clave_estado, 0.0) - time.time()))
+    if restante <= 0:
+        st.session_state[clave_estado] = 0.0
+        st.rerun()
+        return
+
+    minutos, seg = divmod(restante, 60)
+    pct = max(2.0, min(100.0, (restante / float(BLOQUEO_SEGUNDOS)) * 100.0))
+    st.html(
+        f'<div class="dss-lock-card">'
+        f'<div class="dss-lock-kicker"><span class="dss-lock-dot"></span> Escudo Anti-DDoS Activo</div>'
+        f'<div class="dss-lock-title">Bloqueo temporal de seguridad ({MAX_INTENTOS}/{MAX_INTENTOS} intentos)</div>'
+        f'<div class="dss-lock-sub">{subtitulo}</div>'
+        f'<div class="dss-lock-clock">'
+        f'<div class="dss-lock-unit"><span class="dss-lock-num">{minutos:02d}</span><span class="dss-lock-lbl">Minutos</span></div>'
+        f'<span class="dss-lock-sep">:</span>'
+        f'<div class="dss-lock-unit"><span class="dss-lock-num">{seg:02d}</span><span class="dss-lock-lbl">Segundos</span></div>'
+        f"</div>"
+        f'<div class="dss-lock-bar-track"><div class="dss-lock-bar-fill" style="width:{pct:.1f}%;"></div></div>'
+        f"</div>"
+    )
+
+
+@st.fragment(run_every=1)
+def _render_panel_otp_vivo():
+    """Panel gráfico OTP con reloj de vigencia en vivo y matriz visual de 6 dígitos."""
+    recuperacion = st.session_state.get("auth_recuperacion")
+    if not recuperacion:
+        return
+
+    restante_exp = max(0, int(float(recuperacion.get("expira", 0.0)) - time.time()))
+    if restante_exp <= 0:
+        st.session_state["auth_recuperacion"] = None
+        st.rerun()
+        return
+
+    min_e, seg_e = divmod(restante_exp, 60)
+    correo_mask = _enmascarar_correo(recuperacion["correo"])
+    enviado = bool(recuperacion.get("enviado"))
+    intentos_usados = int(recuperacion.get("intentos", 0))
+    intentos_rest = max(0, MAX_INTENTOS - intentos_usados)
+    color_int = "#34D399" if intentos_rest == MAX_INTENTOS else "#FBBF24"
+
+    estado_txt = (
+        f"✓ Despachado a {correo_mask}"
+        if enviado
+        else f"⚠ Contingencia SMTP · {correo_mask}"
+    )
+
+    st.html(
+        f'<div class="dss-otp-card">'
+        f'<div class="dss-otp-badge-row">'
+        f'<span class="dss-otp-mail-pill">{estado_txt}</span>'
+        f'<span class="dss-otp-timer-pill">⏱ Vigencia: {min_e:02d}:{seg_e:02d}</span>'
+        f"</div>"
+        f'<div style="font-size:.76rem;color:#CBD5E1;line-height:1.4;">'
+        f"Ingrese los <b>6 dígitos numéricos</b> enviados a su correo para verificar su identidad:"
+        f"</div>"
+        f'<div class="dss-otp-slots">'
+        f'<div class="dss-otp-slot">1</div>'
+        f'<div class="dss-otp-slot">2</div>'
+        f'<div class="dss-otp-slot">3</div>'
+        f'<span class="dss-otp-slot-sep">—</span>'
+        f'<div class="dss-otp-slot">4</div>'
+        f'<div class="dss-otp-slot">5</div>'
+        f'<div class="dss-otp-slot">6</div>'
+        f"</div>"
+        f'<div class="dss-otp-meta">'
+        f'<span>Canal cifrado <b>TLS · SMTP</b></span>'
+        f'<span>Intentos disponibles: <b style="color:{color_int};">{intentos_rest} de {MAX_INTENTOS}</b></span>'
+        f"</div>"
+        f"</div>"
+    )
+
+
 def _cabecera(eyebrow: str, titulo: str, subtitulo: str, paso: str = ""):
     paso_html = f'<div class="dss-auth-step">{paso}</div>' if paso else ""
     st.html(
@@ -272,9 +350,9 @@ def _vista_login():
 
     bloqueado = _segundos_bloqueo()
     if bloqueado:
-        st.warning(
-            f"🛡️ Protección Anti-DDoS activa: Se superó el límite de {MAX_INTENTOS} intentos. "
-            f"Acceso bloqueado temporalmente por seguridad durante {_formatear_tiempo(bloqueado)}."
+        _render_reloj_bloqueo(
+            "auth_bloqueo",
+            "Se alcanzó el límite de intentos fallidos de inicio de sesión. El acceso se desbloqueará automáticamente al finalizar la cuenta regresiva.",
         )
 
     with st.form("login_form", border=False):
@@ -403,9 +481,9 @@ def _vista_recuperar():
 
     bloqueado_rec = _segundos_bloqueo_rec()
     if bloqueado_rec > 0:
-        st.warning(
-            f"🛡️ Protección Anti-DDoS activa: Se alcanzó el límite máximo de {MAX_INTENTOS} intentos "
-            f"de recuperación para este usuario. Espere {_formatear_tiempo(bloqueado_rec)} antes de reintentar."
+        _render_reloj_bloqueo(
+            "auth_rec_bloqueo",
+            "Se alcanzó el límite máximo de 2 intentos de recuperación para proteger el servidor contra ataques DDoS. Espere a que el contador llegue a 00:00.",
         )
 
     with st.form("recuperar_form", border=False):
@@ -468,38 +546,25 @@ def _vista_codigo():
 
     bloqueado_rec = _segundos_bloqueo_rec()
     if bloqueado_rec > 0:
-        st.warning(
-            f"🛡️ Límite Anti-DDoS alcanzado ({MAX_INTENTOS} solicitudes en 5 min). "
-            f"Espere {_formatear_tiempo(bloqueado_rec)} para solicitar un nuevo código."
+        _render_reloj_bloqueo(
+            "auth_rec_bloqueo",
+            "Se alcanzó el límite máximo de 2 envíos de código en 5 minutos. El reenvío se habilitará al terminar el conteo.",
         )
 
-    correo_mask = _enmascarar_correo(recuperacion["correo"])
-    enviado = bool(recuperacion.get("enviado"))
-    estado_envio = (
-        "Correo de seguridad entregado correctamente. "
-        f"Ingrese el código temporal de {LONGITUD_CODIGO} dígitos recibido en su bandeja de entrada."
-        if enviado
-        else "No fue posible despachar el correo en este momento. Solicite un nuevo código cuando el servicio SMTP esté disponible."
-    )
+    _render_panel_otp_vivo()
 
-    st.html(
-        f'<div class="dss-auth-mail-box">'
-        f'<div class="dss-auth-mail-title">Código de verificación · {correo_mask}</div>'
-        f'<div class="dss-auth-mail-sub">{estado_envio}</div>'
-        f"</div>"
-    )
-
-    with st.form("codigo_form", border=False):
-        codigo = st.text_input(
-            "Código de verificación (6 dígitos)",
-            max_chars=LONGITUD_CODIGO,
-            placeholder="000000",
-        )
-        enviar = st.form_submit_button(
-            "Verificar código y continuar",
-            type="primary",
-            width="stretch",
-        )
+    with st.container(key="otp_input_wrap"):
+        with st.form("codigo_form", border=False):
+            codigo = st.text_input(
+                "PIN de seguridad (6 dígitos)",
+                max_chars=LONGITUD_CODIGO,
+                placeholder="••••••",
+            )
+            enviar = st.form_submit_button(
+                "Verificar código y continuar",
+                type="primary",
+                width="stretch",
+            )
 
     if enviar:
         _verificar_codigo(codigo.strip())

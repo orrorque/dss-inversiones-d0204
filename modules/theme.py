@@ -1221,6 +1221,143 @@ h1,h2,h3,h4,h5,h6{ color:#F4F8FE; letter-spacing:-.02em; font-weight:700; }
   color:#F7D9A8; font-size:1.15rem; font-weight:800; letter-spacing:.24em;
   font-variant-numeric:tabular-nums;
 }
+
+/* ---------------- Reloj Dinámico Anti-DDoS y Panel OTP 6 Dígitos ---------------- */
+@keyframes dss-pulse-red{
+  0%, 100%{ box-shadow:0 0 0 0 rgba(255, 82, 82, .45); }
+  50%{ box-shadow:0 0 0 8px rgba(255, 82, 82, 0); }
+}
+@keyframes dss-blink{
+  0%, 100%{ opacity:1; }
+  50%{ opacity:.25; }
+}
+.dss-lock-card{
+  margin:6px 0 14px; padding:16px 18px; border-radius:16px;
+  background:linear-gradient(145deg, rgba(48, 16, 26, .92) 0%, rgba(22, 12, 20, .96) 100%);
+  border:1px solid rgba(255, 92, 92, .45);
+  box-shadow:0 18px 36px -20px rgba(255, 59, 59, .35);
+  text-align:center;
+}
+.dss-lock-kicker{
+  display:inline-flex; align-items:center; gap:7px;
+  padding:4px 11px; border-radius:999px;
+  background:rgba(255, 82, 82, .15); border:1px solid rgba(255, 82, 82, .38);
+  font-size:.62rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase;
+  color:#FF8080; margin-bottom:8px;
+}
+.dss-lock-dot{
+  width:7px; height:7px; border-radius:50%; background:#FF4D4D;
+  animation:dss-pulse-red 1.4s infinite;
+}
+.dss-lock-title{
+  font-size:.9rem; font-weight:750; color:#FFF0F0; margin-bottom:4px;
+}
+.dss-lock-sub{
+  font-size:.73rem; color:#FCA5A5; line-height:1.4; margin-bottom:12px;
+}
+.dss-lock-clock{
+  display:flex; justify-content:center; align-items:center; gap:10px;
+  margin:8px 0 12px;
+}
+.dss-lock-unit{
+  min-width:68px; padding:8px 12px; border-radius:12px;
+  background:#0B0F1A; border:1px solid rgba(255, 107, 107, .38);
+  box-shadow:inset 0 2px 8px rgba(0,0,0,.6);
+  display:flex; flex-direction:column; align-items:center;
+}
+.dss-lock-num{
+  font-family:"JetBrains Mono", monospace;
+  font-size:1.55rem; font-weight:800; color:#FF5252;
+  line-height:1.1; font-variant-numeric:tabular-nums;
+}
+.dss-lock-lbl{
+  font-size:.55rem; text-transform:uppercase; letter-spacing:.12em;
+  color:#FDA4AF; font-weight:700; margin-top:3px;
+}
+.dss-lock-sep{
+  font-family:"JetBrains Mono", monospace;
+  font-size:1.45rem; font-weight:800; color:#FF6B6B;
+  animation:dss-blink 1s steps(2, start) infinite;
+}
+.dss-lock-bar-track{
+  width:100%; height:6px; border-radius:999px;
+  background:rgba(11, 15, 26, .85); overflow:hidden;
+  border:1px solid rgba(255, 107, 107, .22);
+}
+.dss-lock-bar-fill{
+  height:100%; border-radius:999px;
+  background:linear-gradient(90deg, #FF4D4D 0%, #F97316 100%);
+  transition:width .6s linear;
+}
+
+.dss-otp-card{
+  margin:4px 0 12px; padding:15px 16px 13px; border-radius:16px;
+  background:linear-gradient(155deg, #152338 0%, #0E1726 100%);
+  border:1px solid rgba(56, 189, 248, .32);
+  box-shadow:0 16px 32px -22px rgba(14, 165, 233, .35);
+  text-align:center;
+}
+.dss-otp-badge-row{
+  display:flex; justify-content:space-between; align-items:center;
+  gap:8px; margin-bottom:10px; flex-wrap:wrap;
+}
+.dss-otp-mail-pill{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:4px 10px; border-radius:999px;
+  background:rgba(16, 185, 129, .12); border:1px solid rgba(16, 185, 129, .32);
+  color:#6EE7B7; font-size:.66rem; font-weight:700;
+}
+.dss-otp-timer-pill{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:4px 10px; border-radius:999px;
+  background:rgba(56, 189, 248, .12); border:1px solid rgba(56, 189, 248, .3);
+  color:#7DD3FC; font-family:"JetBrains Mono", monospace;
+  font-size:.68rem; font-weight:700; font-variant-numeric:tabular-nums;
+}
+.dss-otp-slots{
+  display:flex; justify-content:center; align-items:center; gap:7px;
+  margin:10px 0 10px;
+}
+.dss-otp-slot{
+  width:38px; height:44px; border-radius:10px;
+  background:#09111E; border:1px solid rgba(56, 189, 248, .38);
+  display:grid; place-items:center;
+  font-family:"JetBrains Mono", monospace;
+  font-size:1.15rem; font-weight:800; color:#38BDF8;
+  box-shadow:inset 0 2px 6px rgba(0,0,0,.55), 0 0 12px -4px rgba(56, 189, 248, .25);
+}
+.dss-otp-slot-sep{
+  color:#64748B; font-weight:800; font-size:1rem; padding:0 2px;
+}
+.dss-otp-meta{
+  display:flex; justify-content:space-between; align-items:center;
+  font-size:.68rem; color:#94A3B8; padding-top:8px;
+  border-top:1px dashed rgba(148, 163, 184, .18);
+}
+.dss-otp-meta b{ color:#F8FAFC; font-variant-numeric:tabular-nums; }
+
+.st-key-otp_input_wrap input[type="text"]{
+  font-family:"JetBrains Mono", monospace !important;
+  font-size:1.65rem !important;
+  font-weight:800 !important;
+  letter-spacing:.55em !important;
+  text-align:center !important;
+  color:#F8FAFC !important;
+  background:#09111E !important;
+  border:1.5px solid rgba(56, 189, 248, .48) !important;
+  border-radius:14px !important;
+  padding:14px 16px 14px 26px !important;
+  height:58px !important;
+  box-shadow:0 0 22px -8px rgba(56, 189, 248, .38) !important;
+}
+.st-key-otp_input_wrap input[type="text"]:focus{
+  border-color:#F2B45C !important;
+  box-shadow:0 0 26px -6px rgba(242, 180, 92, .52) !important;
+}
+.st-key-otp_input_wrap input[type="text"]::placeholder{
+  color:rgba(148, 163, 184, .28) !important;
+  letter-spacing:.55em !important;
+}
 .dss-auth-foot{
   text-align:center; font-size:.66rem; color:var(--dss-faint);
   margin-top:14px; line-height:1.6;
