@@ -281,6 +281,62 @@ def registrar_recuperacion(usuario: str, correo: str, codigo: str) -> None:
         conn.commit()
 
 
+def segundos_bloqueo_recuperacion(usuario: str, max_intentos: int = 2, ventana_seg: int = 300) -> int:
+    """
+    Protección Anti-DDoS: verifica en SQLite si un usuario ya acumuló >= max_intentos
+    solicitudes de recuperación en los últimos ventana_seg (300 s = 5 min).
+    Retorna los segundos restantes de bloqueo (0 si tiene permitido continuar).
+    """
+    ahora = time.time()
+    corte = ahora - ventana_seg
+    with _conectar() as conn:
+        filas = conn.execute(
+            """
+            SELECT creado_en FROM recuperaciones
+            WHERE usuario = ? AND creado_en > ?
+            ORDER BY creado_en ASC
+            """,
+            (usuario, corte),
+        ).fetchall()
+    if len(filas) >= max_intentos:
+        primero = float(filas[0]["creado_en"])
+        return max(1, int((primero + ventana_seg) - ahora))
+    return 0
+
+
+def segundos_bloqueo_login_usuario(usuario_o_id: str, max_intentos: int = 2, ventana_seg: int = 300) -> int:
+    """
+    Protección Anti-DDoS / Fuerza Bruta por usuario en SQLite:
+    bloquea por 5 minutos (300 s) tras 2 intentos fallidos de login.
+    """
+    limpio = (usuario_o_id or "").strip().lower()
+    if not limpio:
+        return 0
+    ahora = time.time()
+    corte = ahora - ventana_seg
+    with _conectar() as conn:
+        filas = conn.execute(
+            """
+            SELECT creado_en, exito FROM auditoria
+            WHERE (LOWER(usuario_id) = ? OR LOWER(correo) = ?)
+              AND evento = 'LOGIN'
+              AND creado_en > ?
+            ORDER BY creado_en DESC
+            LIMIT ?
+            """,
+            (limpio, limpio, corte, max_intentos),
+        ).fetchall()
+    fallos_consecutivos = []
+    for f in filas:
+        if int(f["exito"] or 0) == 1:
+            break
+        fallos_consecutivos.append(float(f["creado_en"]))
+    if len(fallos_consecutivos) >= max_intentos:
+        mas_reciente = max(fallos_consecutivos)
+        return max(1, int((mas_reciente + ventana_seg) - ahora))
+    return 0
+
+
 def validar_recuperacion(usuario: str, codigo: str) -> dict | None:
     with _conectar() as conn:
         fila = conn.execute(

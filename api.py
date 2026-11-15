@@ -110,28 +110,33 @@ async def api(scope, receive, send):
                 "usuarios_activos": usuarios_activos,
                 "ordenes_registradas": total_ordenes,
                 "cors": "enabled",
-                "rate_limit": "10 req/min",
+                "rate_limit": "2 int / 5 min (Anti-DDoS)",
             },
         )
         return
 
     if method == "POST" and path == "/api/auth/login":
         ahora = time.time()
-        ventana = [t for t in _intentos_login.setdefault("login", []) if ahora - t < 60]
-        _intentos_login["login"] = ventana
-        if len(ventana) >= 10:
-            await _send_json(send, 429, {"detail": "Rate limit excedido. Intente más tarde."})
-            return
-        _intentos_login["login"].append(ahora)
         try:
             cuerpo = json.loads((await _leer_cuerpo(receive)).decode("utf-8") or "{}")
         except Exception:
             cuerpo = {}
         identificador = str(cuerpo.get("identificador") or "").strip()
+        clave_rl = identificador.lower() or "anon"
+        ventana = [t for t in _intentos_login.setdefault(clave_rl, []) if ahora - t < 300]
+        _intentos_login[clave_rl] = ventana
+        if len(ventana) >= 2:
+            await _send_json(
+                send,
+                429,
+                {"detail": "Protección Anti-DDoS activa: máximo 2 intentos fallidos cada 5 minutos."},
+            )
+            return
         password = str(cuerpo.get("password") or "")
         usuario = db_persistencia.obtener_usuario(identificador) if identificador else None
         exito = False
         if usuario and db_persistencia.verificar_password(password, usuario["password_hash"]):
+            _intentos_login.pop(clave_rl, None)
             exito = True
             token = crear_jwt(
                 {
@@ -156,6 +161,7 @@ async def api(scope, receive, send):
                 },
             )
         else:
+            _intentos_login.setdefault(clave_rl, []).append(ahora)
             db_persistencia.registrar_auditoria(
                 identificador or "anon", identificador or "anon", "LOGIN", "Intento fallido (API)", False
             )

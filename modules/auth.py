@@ -35,8 +35,8 @@ USUARIOS_MOCK = {
     },
 }
 
-MAX_INTENTOS = 5
-BLOQUEO_SEGUNDOS = 60
+MAX_INTENTOS = 2
+BLOQUEO_SEGUNDOS = 300
 VIGENCIA_CODIGO_SEGUNDOS = 300
 LONGITUD_CODIGO = 6
 MIN_LONGITUD_PASSWORD = 8
@@ -51,6 +51,8 @@ def inicializar_sesion():
         "auth_vista": "login",
         "auth_intentos": 0,
         "auth_bloqueo": 0.0,
+        "auth_rec_intentos": 0,
+        "auth_rec_bloqueo": 0.0,
         "auth_recuperacion": None,
         "auth_mensaje": None,
     }
@@ -128,7 +130,18 @@ def _politica_password(password: str):
 
 
 def _segundos_bloqueo() -> int:
-    return max(0, int(st.session_state["auth_bloqueo"] - time.time()))
+    return max(0, int(st.session_state.get("auth_bloqueo", 0.0) - time.time()))
+
+
+def _segundos_bloqueo_rec() -> int:
+    return max(0, int(st.session_state.get("auth_rec_bloqueo", 0.0) - time.time()))
+
+
+def _formatear_tiempo(segundos: int) -> str:
+    minutos, seg = divmod(max(0, int(segundos)), 60)
+    if minutos > 0:
+        return f"{minutos} min {seg:02d} s"
+    return f"{seg} s"
 
 
 def _cabecera(eyebrow: str, titulo: str, subtitulo: str, paso: str = ""):
@@ -148,10 +161,57 @@ def _ir(vista: str):
     st.rerun()
 
 
-def _generar_codigo(identificador: str) -> bool:
+def _generar_codigo(identificador: str) -> tuple[bool, int]:
+    """
+    Genera y envía el código de recuperación validando el límite Anti-DDoS:
+    máximo 2 intentos por usuario cada 5 minutos (300 segundos).
+    Retorna (exito, segundos_bloqueo_restantes).
+    """
+    bloqueo_ses = _segundos_bloqueo_rec()
+    if bloqueo_ses > 0:
+        return False, bloqueo_ses
+
     user_id, registro = _buscar_usuario(identificador)
     if registro is None:
-        return False
+        st.session_state["auth_rec_intentos"] = st.session_state.get("auth_rec_intentos", 0) + 1
+        try:
+            db_persistencia.inicializar_db()
+            db_persistencia.registrar_auditoria(
+                identificador.strip(),
+                identificador.strip(),
+                "RECUPERACION_FALLIDA",
+                "Intento de recordar usuario inexistente",
+                False,
+            )
+        except Exception:
+            pass
+        if st.session_state["auth_rec_intentos"] >= MAX_INTENTOS:
+            st.session_state["auth_rec_intentos"] = 0
+            st.session_state["auth_rec_bloqueo"] = time.time() + BLOQUEO_SEGUNDOS
+            return False, BLOQUEO_SEGUNDOS
+        return False, 0
+
+    try:
+        db_persistencia.inicializar_db()
+        seg_db = db_persistencia.segundos_bloqueo_recuperacion(
+            user_id, max_intentos=MAX_INTENTOS, ventana_seg=BLOQUEO_SEGUNDOS
+        )
+    except Exception:
+        seg_db = 0
+
+    if seg_db > 0:
+        st.session_state["auth_rec_bloqueo"] = time.time() + seg_db
+        try:
+            db_persistencia.registrar_auditoria(
+                user_id,
+                registro.get("correo", ""),
+                "BLOQUEO_DDOS_RECUPERACION",
+                f"Bloqueado por superar {MAX_INTENTOS} solicitudes en 5 min",
+                False,
+            )
+        except Exception:
+            pass
+        return False, seg_db
 
     correo_destino = str(registro.get("correo") or "dinversionesd0204@gmail.com").strip()
     if correo_destino.lower().endswith("@d-02-04.com"):
@@ -169,6 +229,13 @@ def _generar_codigo(identificador: str) -> bool:
     try:
         db_persistencia.inicializar_db()
         db_persistencia.registrar_recuperacion(user_id, correo_destino, codigo)
+        db_persistencia.registrar_auditoria(
+            user_id,
+            correo_destino,
+            "RECUPERACION_CODIGO",
+            "Solicitud de código de recuperación (límite 2/5min)",
+            True,
+        )
     except Exception:
         pass
     _log.warning(
@@ -184,7 +251,7 @@ def _generar_codigo(identificador: str) -> bool:
         )
     except Exception:
         st.session_state["auth_recuperacion"]["enviado"] = False
-    return True
+    return True, 0
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +273,8 @@ def _vista_login():
     bloqueado = _segundos_bloqueo()
     if bloqueado:
         st.warning(
-            f"Acceso temporalmente bloqueado por seguridad. Intente nuevamente en {bloqueado} s."
+            f"🛡️ Protección Anti-DDoS activa: Se superó el límite de {MAX_INTENTOS} intentos. "
+            f"Acceso bloqueado temporalmente por seguridad durante {_formatear_tiempo(bloqueado)}."
         )
 
     with st.form("login_form", border=False):
@@ -253,6 +321,24 @@ def _procesar_login(identificador: str, password: str, recordar: bool = True):
         return
 
     user_id, registro = _buscar_usuario(identificador)
+    clave_eval = user_id or identificador.strip().lower()
+
+    try:
+        db_persistencia.inicializar_db()
+        seg_bloqueo_usr = db_persistencia.segundos_bloqueo_login_usuario(
+            clave_eval, max_intentos=MAX_INTENTOS, ventana_seg=BLOQUEO_SEGUNDOS
+        )
+    except Exception:
+        seg_bloqueo_usr = 0
+
+    if seg_bloqueo_usr > 0:
+        st.session_state["auth_bloqueo"] = time.time() + seg_bloqueo_usr
+        st.error(
+            f"🛡️ Cuenta protegida contra ataques de fuerza bruta / DDoS (máximo {MAX_INTENTOS} intentos). "
+            f"Intente nuevamente en {_formatear_tiempo(seg_bloqueo_usr)}."
+        )
+        st.rerun()
+
     if registro and db_persistencia.verificar_password(password, registro["password"]):
         token = crear_jwt({"sub": user_id, "rol": registro["rol"], "nombre": registro["nombre"]})
         st.session_state.pop("alerta_enviada", None)
@@ -277,7 +363,7 @@ def _procesar_login(identificador: str, password: str, recordar: bool = True):
 
     try:
         db_persistencia.registrar_auditoria(
-            identificador.strip(), identificador.strip(), "LOGIN", "Intento fallido (Web)", False
+            clave_eval, identificador.strip(), "LOGIN", "Intento fallido (Web)", False
         )
     except Exception:
         pass
@@ -286,10 +372,25 @@ def _procesar_login(identificador: str, password: str, recordar: bool = True):
     if restantes <= 0:
         st.session_state["auth_intentos"] = 0
         st.session_state["auth_bloqueo"] = time.time() + BLOQUEO_SEGUNDOS
-        st.error("Demasiados intentos fallidos. El acceso se bloqueó por 60 segundos.")
+        try:
+            db_persistencia.registrar_auditoria(
+                clave_eval,
+                identificador.strip(),
+                "BLOQUEO_DDOS_LOGIN",
+                f"Bloqueo de 5 min tras {MAX_INTENTOS} intentos fallidos",
+                False,
+            )
+        except Exception:
+            pass
+        st.error(
+            f"🛡️ Demasiados intentos fallidos ({MAX_INTENTOS}/{MAX_INTENTOS}). "
+            f"Por seguridad Anti-DDoS, el acceso se bloqueó por 5 minutos."
+        )
         st.rerun()
 
-    st.error(f"Credenciales inválidas. Verifique sus datos ({restantes} intentos restantes).")
+    st.error(
+        f"Credenciales inválidas. Verifique sus datos ({restantes} intento restante antes del bloqueo de 5 min)."
+    )
 
 
 def _vista_recuperar():
@@ -300,6 +401,13 @@ def _vista_recuperar():
         paso="Paso 1 de 3 · Identificación",
     )
 
+    bloqueado_rec = _segundos_bloqueo_rec()
+    if bloqueado_rec > 0:
+        st.warning(
+            f"🛡️ Protección Anti-DDoS activa: Se alcanzó el límite máximo de {MAX_INTENTOS} intentos "
+            f"de recuperación para este usuario. Espere {_formatear_tiempo(bloqueado_rec)} antes de reintentar."
+        )
+
     with st.form("recuperar_form", border=False):
         identificador = st.text_input(
             "Correo electrónico o ID de usuario",
@@ -309,6 +417,7 @@ def _vista_recuperar():
             "Enviar código de recuperación",
             type="primary",
             width="stretch",
+            disabled=bloqueado_rec > 0,
         )
 
     if enviar:
@@ -318,10 +427,17 @@ def _vista_recuperar():
         elif "@" in valor and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", valor):
             st.error("El formato del correo electrónico no es válido.")
         else:
-            encontrado = _generar_codigo(valor)
-            if not encontrado:
+            encontrado, seg_bloq = _generar_codigo(valor)
+            if seg_bloq > 0:
                 st.error(
-                    "No se encontró una cuenta asociada a los datos ingresados."
+                    f"🛡️ Límite Anti-DDoS alcanzado ({MAX_INTENTOS} intentos en 5 minutos). "
+                    f"Por seguridad, espere {_formatear_tiempo(seg_bloq)}."
+                )
+                st.rerun()
+            elif not encontrado:
+                rest = max(0, MAX_INTENTOS - st.session_state.get("auth_rec_intentos", 0))
+                st.error(
+                    f"No se encontró una cuenta asociada a los datos ingresados ({rest} intento restante)."
                 )
             else:
                 _ir("codigo")
@@ -349,6 +465,13 @@ def _vista_codigo():
         if st.button("Solicitar código", type="primary", width="stretch"):
             _ir("recuperar")
         return
+
+    bloqueado_rec = _segundos_bloqueo_rec()
+    if bloqueado_rec > 0:
+        st.warning(
+            f"🛡️ Límite Anti-DDoS alcanzado ({MAX_INTENTOS} solicitudes en 5 min). "
+            f"Espere {_formatear_tiempo(bloqueado_rec)} para solicitar un nuevo código."
+        )
 
     correo_mask = _enmascarar_correo(recuperacion["correo"])
     enviado = bool(recuperacion.get("enviado"))
@@ -388,9 +511,16 @@ def _vista_codigo():
             type="tertiary",
             key="auth_reenviar",
             width="stretch",
+            disabled=bloqueado_rec > 0,
         ):
-            _generar_codigo(recuperacion["usuario"])
-            st.toast("Se generó y envió un nuevo código de verificación.", icon="✉️")
+            ok_reenvio, seg_bloq = _generar_codigo(recuperacion["usuario"])
+            if seg_bloq > 0:
+                st.toast(
+                    f"🛡️ Bloqueo Anti-DDoS: máximo {MAX_INTENTOS} envíos cada 5 minutos.",
+                    icon="🛡️",
+                )
+            elif ok_reenvio:
+                st.toast("Se generó y envió un segundo código de verificación (2/2).", icon="✉️")
             st.rerun()
     with col_volver:
         if st.button(
@@ -418,9 +548,15 @@ def _verificar_codigo(codigo: str):
         restantes = MAX_INTENTOS - recuperacion["intentos"]
         if restantes <= 0:
             st.session_state["auth_recuperacion"] = None
-            st.error("Demasiados intentos incorrectos. Solicite un nuevo código.")
+            st.session_state["auth_rec_bloqueo"] = time.time() + BLOQUEO_SEGUNDOS
+            st.session_state["auth_vista"] = "recuperar"
+            st.error(
+                f"🛡️ Se superaron los {MAX_INTENTOS} intentos permitidos. "
+                f"Recuperación bloqueada por 5 minutos (Anti-DDoS)."
+            )
+            st.rerun()
         else:
-            st.error(f"Código incorrecto. Verifique e intente nuevamente ({restantes} restantes).")
+            st.error(f"Código incorrecto. Verifique e intente nuevamente ({restantes} intento restante).")
         return
 
     st.session_state["auth_vista"] = "nueva"

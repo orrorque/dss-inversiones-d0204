@@ -222,7 +222,7 @@ def _api_get(path: str, timeout: int = 3):
                     "usuarios_activos": usuarios_activos,
                     "ordenes_registradas": db_persistencia.contar_ordenes(),
                     "cors": "enabled",
-                    "rate_limit": "10 req/min",
+                    "rate_limit": "2 int / 5 min (Anti-DDoS)",
                 }
             if path == "/api/ordenes":
                 return 200, {"ordenes": db_persistencia.listar_ordenes(100)}
