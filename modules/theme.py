@@ -617,6 +617,12 @@ h1,h2,h3,h4,h5,h6{ color:#F4F8FE; letter-spacing:-.02em; font-weight:700; }
   filter:brightness(1.05);
   box-shadow:0 16px 32px -14px rgba(242,180,92,.85);
 }
+[data-testid="InputInstructions"]{
+  display:none !important;
+  visibility:hidden !important;
+  height:0 !important;
+  overflow:hidden !important;
+}
 
 /* ---------------- Contenedores / tarjetas ---------------- */
 /* ---------------- Contenedores / tarjetas unificadas ---------------- */
