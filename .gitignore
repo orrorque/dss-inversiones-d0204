@@ -1,0 +1,22 @@
+# Entorno virtual local (no subir a GitHub / Nube)
+dss_env/
+venv/
+.venv/
+env/
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Base de datos transaccional autogenerada y secretos locales
+data/dss.db
+data/dss.db-journal
+data/dss.db-wal
+.streamlit/secrets.toml
+.env
+
+# Archivos temporales del sistema
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,616 @@
+import copy
+import logging
+import re
+import secrets
+import time
+
+import streamlit as st
+
+from . import db as db_persistencia
+from .notifications import email_alerta_configurado, enviar_codigo_recuperacion
+from .security import crear_jwt, validar_jwt
+from .theme import chip, obtener_imagen_b64
+
+_log = logging.getLogger("dss.auth")
+
+# Cuentas demo de respaldo (hash PBKDF2 generado en tiempo de ejecución).
+USUARIOS_MOCK = {
+    "admin": {
+        "password": db_persistencia.hash_password("admin123"),
+        "rol": "Administrador",
+        "nombre": "Soporte del Sistema (IT)",
+        "correo": "josephorrorque17@gmail.com",
+    },
+    "gerente": {
+        "password": db_persistencia.hash_password("admin123"),
+        "rol": "Gerencia",
+        "nombre": "Director Logístico",
+        "correo": "dinversionesd0204@gmail.com",
+    },
+    "operador": {
+        "password": db_persistencia.hash_password("planta123"),
+        "rol": "Operaciones",
+        "nombre": "Supervisor de Almacén",
+        "correo": "fernandouah23@gmail.com",
+    },
+}
+
+MAX_INTENTOS = 5
+BLOQUEO_SEGUNDOS = 60
+VIGENCIA_CODIGO_SEGUNDOS = 300
+LONGITUD_CODIGO = 6
+MIN_LONGITUD_PASSWORD = 8
+
+
+def inicializar_sesion():
+    valores = {
+        "autenticado": False,
+        "rol": None,
+        "nombre": None,
+        "usuario": None,
+        "auth_vista": "login",
+        "auth_intentos": 0,
+        "auth_bloqueo": 0.0,
+        "auth_recuperacion": None,
+        "auth_mensaje": None,
+    }
+    for clave, valor in valores.items():
+        st.session_state.setdefault(clave, valor)
+
+
+# ---------------------------------------------------------------------------
+# Utilidades de autenticación
+# ---------------------------------------------------------------------------
+
+
+def _db_usuarios():
+    usuarios = {}
+    try:
+        db_persistencia.inicializar_db()
+        for u in db_persistencia.todos_los_usuarios():
+            if not u.get("activo"):
+                continue
+            usuarios[u["id"]] = {
+                "password": u["password_hash"],
+                "rol": u["rol"],
+                "nombre": u["nombre"],
+                "correo": u["email"],
+            }
+    except Exception:
+        usuarios = {}
+    if not usuarios:
+        usuarios = copy.deepcopy(USUARIOS_MOCK)
+    st.session_state["usuarios_db"] = usuarios
+    return st.session_state["usuarios_db"]
+
+
+def _buscar_usuario(identificador: str):
+    """Permite autenticar o recuperar clave por ID de usuario o correo corporativo."""
+    limpio = (identificador or "").strip().lower()
+    if not limpio:
+        return None, None
+
+    alias_corporativos = {
+        "gerencia@d-02-04.com": "gerente",
+        "compras@d-02-04.com": "gerente",
+        "dinversionesd0204@gmail.com": "gerente",
+        "operaciones@d-02-04.com": "operador",
+        "admin@d-02-04.com": "admin",
+    }
+    if limpio in alias_corporativos:
+        limpio = alias_corporativos[limpio]
+
+    db = _db_usuarios()
+    if limpio in db:
+        return limpio, db[limpio]
+
+    for user_id, datos in db.items():
+        if datos.get("correo", "").lower() == limpio:
+            return user_id, datos
+
+    return None, None
+
+
+def _enmascarar_correo(correo: str) -> str:
+    if "@" not in correo:
+        return correo
+    local, dominio = correo.split("@", 1)
+    visible = local[:2] if len(local) > 2 else local[:1]
+    return f"{visible}{'•' * max(len(local) - len(visible), 3)}@{dominio}"
+
+
+def _politica_password(password: str):
+    if len(password) < MIN_LONGITUD_PASSWORD:
+        return f"La contraseña debe tener al menos {MIN_LONGITUD_PASSWORD} caracteres."
+    if not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+        return "La contraseña debe combinar letras y números."
+    return None
+
+
+def _segundos_bloqueo() -> int:
+    return max(0, int(st.session_state["auth_bloqueo"] - time.time()))
+
+
+def _cabecera(eyebrow: str, titulo: str, subtitulo: str, paso: str = ""):
+    paso_html = f'<div class="dss-auth-step">{paso}</div>' if paso else ""
+    st.html(
+        '<div class="dss-auth-head">'
+        f"{paso_html}"
+        f'<div class="dss-auth-eyebrow">{eyebrow}</div>'
+        f'<div class="dss-auth-title">{titulo}</div>'
+        f'<div class="dss-auth-sub">{subtitulo}</div>'
+        "</div>"
+    )
+
+
+def _ir(vista: str):
+    st.session_state["auth_vista"] = vista
+    st.rerun()
+
+
+def _generar_codigo(identificador: str) -> bool:
+    user_id, registro = _buscar_usuario(identificador)
+    if registro is None:
+        return False
+
+    correo_destino = str(registro.get("correo") or "dinversionesd0204@gmail.com").strip()
+    if correo_destino.lower().endswith("@d-02-04.com"):
+        correo_destino = "dinversionesd0204@gmail.com"
+
+    codigo = "".join(secrets.choice("0123456789") for _ in range(LONGITUD_CODIGO))
+    st.session_state["auth_recuperacion"] = {
+        "usuario": user_id,
+        "correo": correo_destino,
+        "codigo": codigo,
+        "expira": time.time() + VIGENCIA_CODIGO_SEGUNDOS,
+        "intentos": 0,
+        "enviado": False,
+    }
+    try:
+        db_persistencia.inicializar_db()
+        db_persistencia.registrar_recuperacion(user_id, correo_destino, codigo)
+    except Exception:
+        pass
+    _log.warning(
+        "Código de recuperación para '%s' (%s): %s (vigencia %s s)",
+        user_id,
+        correo_destino,
+        codigo,
+        VIGENCIA_CODIGO_SEGUNDOS,
+    )
+    try:
+        st.session_state["auth_recuperacion"]["enviado"] = enviar_codigo_recuperacion(
+            user_id, correo_destino, codigo
+        )
+    except Exception:
+        st.session_state["auth_recuperacion"]["enviado"] = False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Vistas del flujo de autenticación
+# ---------------------------------------------------------------------------
+
+
+def _vista_login():
+    _cabecera(
+        "Sistema de Soporte a la Decisión · DSS",
+        "Portal de Acceso Corporativo",
+        "Gestión de inventario ROP / EOQ y auditoría ABC · Inversiones D-02-04, C.A.",
+    )
+
+    mensaje = st.session_state.pop("auth_mensaje", None)
+    if mensaje:
+        st.success(mensaje)
+
+    bloqueado = _segundos_bloqueo()
+    if bloqueado:
+        st.warning(
+            f"Acceso temporalmente bloqueado por seguridad. Intente nuevamente en {bloqueado} s."
+        )
+
+    with st.form("login_form", border=False):
+        identificador = st.text_input(
+            "Usuario o correo electrónico",
+            placeholder="Ingrese su usuario o correo registrado",
+        )
+        password = st.text_input(
+            "Contraseña",
+            type="password",
+            placeholder="••••••••",
+        )
+        recordar = st.checkbox("Mantener sesión activa en este equipo", value=True)
+        enviar = st.form_submit_button(
+            "Acceder al sistema",
+            type="primary",
+            width="stretch",
+            disabled=bloqueado > 0,
+        )
+
+    if enviar:
+        _procesar_login(identificador, password, recordar)
+
+    if st.button(
+        "¿Olvidaste tu contraseña?",
+        type="tertiary",
+        key="auth_ir_recuperar",
+        width="stretch",
+    ):
+        _ir("recuperar")
+
+    st.html(
+        '<div class="dss-auth-models">'
+        '<div class="dss-auth-model-badge"><span>Modelo</span><b>EOQ · Wilson</b></div>'
+        '<div class="dss-auth-model-badge"><span>Seguridad</span><b>Punto ROP</b></div>'
+        '<div class="dss-auth-model-badge"><span>Auditoría</span><b>Pareto ABC</b></div>'
+        "</div>"
+    )
+
+
+def _procesar_login(identificador: str, password: str, recordar: bool = True):
+    if not identificador.strip() or not password:
+        st.error("Por favor ingrese su usuario/correo y contraseña.")
+        return
+
+    user_id, registro = _buscar_usuario(identificador)
+    if registro and db_persistencia.verificar_password(password, registro["password"]):
+        token = crear_jwt({"sub": user_id, "rol": registro["rol"], "nombre": registro["nombre"]})
+        st.session_state.pop("alerta_enviada", None)
+        st.session_state.update(
+            autenticado=True,
+            rol=registro["rol"],
+            nombre=registro["nombre"],
+            usuario=user_id,
+            auth_token=token,
+            sesion_persistente=recordar,
+            auth_intentos=0,
+            auth_bloqueo=0.0,
+        )
+        try:
+            st.session_state["auth_refresh_token"] = db_persistencia.crear_refresh_token(user_id)
+            db_persistencia.registrar_auditoria(
+                user_id, registro.get("correo", ""), "LOGIN", "Autenticación exitosa (Web)", True
+            )
+        except Exception:
+            st.session_state["auth_refresh_token"] = None
+        st.rerun()
+
+    try:
+        db_persistencia.registrar_auditoria(
+            identificador.strip(), identificador.strip(), "LOGIN", "Intento fallido (Web)", False
+        )
+    except Exception:
+        pass
+    st.session_state["auth_intentos"] += 1
+    restantes = MAX_INTENTOS - st.session_state["auth_intentos"]
+    if restantes <= 0:
+        st.session_state["auth_intentos"] = 0
+        st.session_state["auth_bloqueo"] = time.time() + BLOQUEO_SEGUNDOS
+        st.error("Demasiados intentos fallidos. El acceso se bloqueó por 60 segundos.")
+        st.rerun()
+
+    st.error(f"Credenciales inválidas. Verifique sus datos ({restantes} intentos restantes).")
+
+
+def _vista_recuperar():
+    _cabecera(
+        "Recuperación de acceso",
+        "¿Olvidaste tu contraseña?",
+        "Ingresa tu correo corporativo o ID de usuario para recibir un código de verificación temporal.",
+        paso="Paso 1 de 3 · Identificación",
+    )
+
+    with st.form("recuperar_form", border=False):
+        identificador = st.text_input(
+            "Correo electrónico o ID de usuario",
+            placeholder="Ingrese su usuario o correo registrado",
+        )
+        enviar = st.form_submit_button(
+            "Enviar código de recuperación",
+            type="primary",
+            width="stretch",
+        )
+
+    if enviar:
+        valor = identificador.strip()
+        if not valor:
+            st.error("Ingrese su correo electrónico o ID de usuario.")
+        elif "@" in valor and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", valor):
+            st.error("El formato del correo electrónico no es válido.")
+        else:
+            encontrado = _generar_codigo(valor)
+            if not encontrado:
+                st.error(
+                    "No se encontró una cuenta asociada a los datos ingresados."
+                )
+            else:
+                _ir("codigo")
+
+    if st.button(
+        "← Volver al inicio de sesión",
+        type="tertiary",
+        key="auth_volver_recuperar",
+        width="stretch",
+    ):
+        _ir("login")
+
+
+def _vista_codigo():
+    _cabecera(
+        "Verificación de seguridad",
+        "Valida tu código temporal",
+        f"Ingresa el código de {LONGITUD_CODIGO} dígitos enviado a tu bandeja corporativa.",
+        paso="Paso 2 de 3 · Verificación",
+    )
+
+    recuperacion = st.session_state.get("auth_recuperacion")
+    if not recuperacion:
+        st.warning("No hay una solicitud de recuperación activa.")
+        if st.button("Solicitar código", type="primary", width="stretch"):
+            _ir("recuperar")
+        return
+
+    correo_mask = _enmascarar_correo(recuperacion["correo"])
+    enviado = bool(recuperacion.get("enviado"))
+    estado_envio = (
+        "Correo de seguridad entregado correctamente. "
+        f"Ingrese el código temporal de {LONGITUD_CODIGO} dígitos recibido en su bandeja de entrada."
+        if enviado
+        else "No fue posible despachar el correo en este momento. Solicite un nuevo código cuando el servicio SMTP esté disponible."
+    )
+
+    st.html(
+        f'<div class="dss-auth-mail-box">'
+        f'<div class="dss-auth-mail-title">Código de verificación · {correo_mask}</div>'
+        f'<div class="dss-auth-mail-sub">{estado_envio}</div>'
+        f"</div>"
+    )
+
+    with st.form("codigo_form", border=False):
+        codigo = st.text_input(
+            "Código de verificación (6 dígitos)",
+            max_chars=LONGITUD_CODIGO,
+            placeholder="000000",
+        )
+        enviar = st.form_submit_button(
+            "Verificar código y continuar",
+            type="primary",
+            width="stretch",
+        )
+
+    if enviar:
+        _verificar_codigo(codigo.strip())
+
+    col_reenviar, col_volver = st.columns(2)
+    with col_reenviar:
+        if st.button(
+            "Reenviar código",
+            type="tertiary",
+            key="auth_reenviar",
+            width="stretch",
+        ):
+            _generar_codigo(recuperacion["usuario"])
+            st.toast("Se generó y envió un nuevo código de verificación.", icon="✉️")
+            st.rerun()
+    with col_volver:
+        if st.button(
+            "Cambiar cuenta",
+            type="tertiary",
+            key="auth_cambiar_usuario",
+            width="stretch",
+        ):
+            _ir("recuperar")
+
+
+def _verificar_codigo(codigo: str):
+    recuperacion = st.session_state.get("auth_recuperacion")
+    if not recuperacion or time.time() > recuperacion["expira"]:
+        st.session_state["auth_recuperacion"] = None
+        st.error("El código venció o no es válido. Solicite uno nuevo.")
+        return
+
+    if not codigo:
+        st.error("Ingrese el código de 6 dígitos.")
+        return
+
+    if not secrets.compare_digest(recuperacion["codigo"], codigo):
+        recuperacion["intentos"] += 1
+        restantes = MAX_INTENTOS - recuperacion["intentos"]
+        if restantes <= 0:
+            st.session_state["auth_recuperacion"] = None
+            st.error("Demasiados intentos incorrectos. Solicite un nuevo código.")
+        else:
+            st.error(f"Código incorrecto. Verifique e intente nuevamente ({restantes} restantes).")
+        return
+
+    st.session_state["auth_vista"] = "nueva"
+    st.rerun()
+
+
+def _vista_nueva():
+    _cabecera(
+        "Actualización de credenciales",
+        "Restablecer contraseña",
+        f"Define una clave segura (mínimo {MIN_LONGITUD_PASSWORD} caracteres con letras y números).",
+        paso="Paso 3 de 3 · Nueva clave",
+    )
+
+    recuperacion = st.session_state.get("auth_recuperacion")
+    if not recuperacion:
+        st.error("La sesión de recuperación expiró. Solicite un nuevo código.")
+        if st.button("Volver a recuperar", type="primary", width="stretch"):
+            _ir("recuperar")
+        return
+
+    with st.form("nueva_form", border=False):
+        nueva = st.text_input(
+            "Nueva contraseña",
+            type="password",
+            placeholder="Mínimo 8 caracteres alfanuméricos",
+        )
+        confirmacion = st.text_input(
+            "Confirmar nueva contraseña",
+            type="password",
+            placeholder="Repite la nueva contraseña",
+        )
+        enviar = st.form_submit_button(
+            "Guardar y restablecer contraseña",
+            type="primary",
+            width="stretch",
+        )
+
+    if enviar:
+        _guardar_password(nueva, confirmacion)
+
+    if st.button(
+        "Cancelar y volver al login",
+        type="tertiary",
+        key="auth_cancelar_nueva",
+        width="stretch",
+    ):
+        st.session_state.update(auth_recuperacion=None, auth_vista="login")
+        st.rerun()
+
+
+def _guardar_password(nueva: str, confirmacion: str):
+    recuperacion = st.session_state.get("auth_recuperacion")
+    if not recuperacion:
+        st.error("La sesión de recuperación expiró. Solicite un nuevo código.")
+        return
+
+    error = _politica_password(nueva)
+    if error:
+        st.error(error)
+        return
+    if nueva != confirmacion:
+        st.error("Las contraseñas ingresadas no coinciden.")
+        return
+
+    user_id = recuperacion["usuario"]
+    db = _db_usuarios()
+    registro = db.get(user_id) or {}
+    if db_persistencia.verificar_password(nueva, registro.get("password") or ""):
+        st.error("La nueva contraseña debe ser diferente a la contraseña actual.")
+        return
+
+    db_persistencia.actualizar_password(user_id, nueva)
+    st.session_state.update(
+        auth_recuperacion=None,
+        auth_vista="login",
+        auth_intentos=0,
+        auth_bloqueo=0.0,
+        auth_mensaje="Contraseña restablecida con éxito. Ya puedes iniciar sesión con tu nueva clave.",
+    )
+    st.rerun()
+
+
+def _renovar_sesion():
+    """Renueva el access token usando el refresh token almacenado en sesión."""
+    token = st.session_state.get("auth_refresh_token")
+    if not token:
+        return False
+    fila = db_persistencia.validar_refresh_token(token)
+    if fila is None:
+        return False
+    usuario_id = fila["usuario_id"]
+    usuario = db_persistencia.obtener_usuario(usuario_id) or {}
+    db_persistencia.revocar_refresh_token(token)
+    st.session_state["auth_refresh_token"] = db_persistencia.crear_refresh_token(usuario_id)
+    st.session_state["auth_token"] = crear_jwt(
+        {
+            "sub": usuario_id,
+            "rol": usuario.get("rol") or "Operaciones",
+            "nombre": usuario.get("nombre") or "Usuario",
+        }
+    )
+    return True
+
+
+_VISTAS = {
+    "login": _vista_login,
+    "recuperar": _vista_recuperar,
+    "codigo": _vista_codigo,
+    "nueva": _vista_nueva,
+}
+
+
+def renderizar_login():
+    st.html('<div class="dss-auth-spacer"></div>')
+    _, centro, _ = st.columns([1, 1.15, 1])
+
+    with centro:
+        with st.container(key="auth_card"):
+            uri_logo = (
+                obtener_imagen_b64("rectangular")
+                or obtener_imagen_b64("cuadrado")
+                or obtener_imagen_b64("circular")
+            )
+            logo_html = (
+                f'<div class="dss-auth-hero-box">'
+                f'<img class="dss-auth-hero-img" src="{uri_logo}" alt="Inversiones D-02-04">'
+                f"</div>"
+                if uri_logo
+                else ""
+            )
+
+            st.html(
+                f'<div class="dss-auth-top-meta">'
+                f'<span class="dss-live"><span class="dss-dot-live"></span> Sistema Operativo</span>'
+                f'<span class="dss-auth-tag">DSS Core · LME</span>'
+                f"</div>"
+                f"{logo_html}"
+            )
+
+            _VISTAS.get(st.session_state["auth_vista"], _vista_login)()
+
+            st.html(
+                f'<div class="dss-auth-foot">'
+                f'{chip("Conexión cifrada TLS", "success")}'
+                f'<div class="dss-auth-foot-copy">Inversiones D-02-04, C.A. · Acceso exclusivo para personal autorizado</div>'
+                f"</div>"
+            )
+
+
+def renderizar_perfil_usuario():
+    nombre = st.session_state.get("nombre") or "Usuario"
+    rol = st.session_state.get("rol") or "—"
+    iniciales = "".join(parte[0] for parte in nombre.split()[:2]).upper() or "U"
+
+    with st.sidebar:
+        with st.container(key="sidebar_profile"):
+            st.html(
+                f'<div class="dss-profile">'
+                f'<div class="dss-avatar">{iniciales}</div>'
+                f"<div>"
+                f'<div class="dss-profile-name">{nombre}</div>'
+                f'<div class="dss-profile-role">Rol: <b>{rol}</b></div>'
+                f"</div>"
+                f"</div>"
+            )
+
+            if st.button("Cerrar sesión", width="stretch"):
+                st.session_state.update(
+                    autenticado=False,
+                    rol=None,
+                    nombre=None,
+                    usuario=None,
+                    auth_token=None,
+                    auth_refresh_token=None,
+                    auth_vista="login",
+                )
+                st.rerun()
+
+            if st.button("Renovar sesión", width="stretch"):
+                if _renovar_sesion():
+                    st.toast("Sesión renovada exitosamente.", icon="✅")
+                else:
+                    st.toast("La sesión expiró. Inicie acceso nuevamente.", icon="⚠️")
+                st.rerun()
+
+        st.html(
+            f'<div class="dss-side-footer">'
+            f'<div class="dss-side-status"><span class="dss-dot-live"></span> '
+            f"Mercado conectado</div>"
+            f'<div style="margin-top:6px;">DSS Core · v2.4</div>'
+            f"</div>"
+        )
