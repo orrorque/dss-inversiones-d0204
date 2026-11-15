@@ -81,7 +81,7 @@ def inicializar_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS usuarios (
                 id TEXT PRIMARY KEY,
-                email TEXT UNIQUE NOT NULL,
+                email TEXT NOT NULL,
                 password_hash TEXT NOT NULL,
                 rol TEXT NOT NULL,
                 nombre TEXT NOT NULL,
@@ -91,6 +91,29 @@ def inicializar_db() -> None:
             )
             """
         )
+        # Migración automática si la tabla usuarios antigua tenía UNIQUE en email
+        sql_tabla = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='usuarios'"
+        ).fetchone()
+        if sql_tabla and "email TEXT UNIQUE" in str(sql_tabla["sql"]):
+            conn.executescript(
+                """
+                ALTER TABLE usuarios RENAME TO usuarios_old;
+                CREATE TABLE usuarios (
+                    id TEXT PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    rol TEXT NOT NULL,
+                    nombre TEXT NOT NULL,
+                    activo INTEGER DEFAULT 1,
+                    creado_en TEXT NOT NULL,
+                    ultimo_acceso TEXT
+                );
+                INSERT INTO usuarios (id, email, password_hash, rol, nombre, activo, creado_en, ultimo_acceso)
+                SELECT id, email, password_hash, rol, nombre, activo, creado_en, ultimo_acceso FROM usuarios_old;
+                DROP TABLE usuarios_old;
+                """
+            )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS recuperaciones (
@@ -172,21 +195,35 @@ def inicializar_db() -> None:
 # ---------------------------------------------------------------------------
 
 def crear_usuario(user_id: str, email: str, password: str, rol: str, nombre: str) -> None:
+    inicializar_db()
+    ahora_str = time.strftime("%Y-%m-%d %H:%M:%S")
+    pwd_hash = hash_password(password)
     with _conectar() as conn:
-        conn.execute(
-            """
-            INSERT INTO usuarios (id, email, password_hash, rol, nombre, creado_en)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                email=excluded.email,
-                password_hash=excluded.password_hash,
-                rol=excluded.rol,
-                nombre=excluded.nombre,
-                activo=1
-            """,
-            (user_id, email, hash_password(password), rol, nombre, time.strftime("%Y-%m-%d %H:%M:%S")),
-        )
-        conn.commit()
+        try:
+            conn.execute(
+                """
+                INSERT INTO usuarios (id, email, password_hash, rol, nombre, creado_en)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    email=excluded.email,
+                    password_hash=excluded.password_hash,
+                    rol=excluded.rol,
+                    nombre=excluded.nombre,
+                    activo=1
+                """,
+                (user_id, email, pwd_hash, rol, nombre, ahora_str),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError:
+            conn.execute(
+                """
+                UPDATE usuarios
+                SET password_hash = ?, rol = ?, nombre = ?, activo = 1
+                WHERE id = ? OR email = ?
+                """,
+                (pwd_hash, rol, nombre, user_id, email),
+            )
+            conn.commit()
 
 
 def obtener_usuario(user_id_o_email: str) -> dict | None:

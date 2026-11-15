@@ -1362,7 +1362,7 @@ def renderizar_panel_acciones(df_resultados):
                 f"</div>"
             )
             buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
                 df_resultados.to_excel(writer, index=False, sheet_name="Matriz_Compras")
             st.download_button(
                 "Descargar matriz (Excel)",
