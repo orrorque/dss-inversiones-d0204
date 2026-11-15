@@ -202,17 +202,8 @@ def _render_panel_otp_vivo():
         f'<span class="dss-otp-mail-pill">{estado_txt}</span>'
         f'<span class="dss-otp-timer-pill">⏱ Vigencia: {min_e:02d}:{seg_e:02d}</span>'
         f"</div>"
-        f'<div style="font-size:.76rem;color:#CBD5E1;line-height:1.4;">'
-        f"Ingrese los <b>6 dígitos numéricos</b> enviados a su correo para verificar su identidad:"
-        f"</div>"
-        f'<div class="dss-otp-slots">'
-        f'<div class="dss-otp-slot">1</div>'
-        f'<div class="dss-otp-slot">2</div>'
-        f'<div class="dss-otp-slot">3</div>'
-        f'<span class="dss-otp-slot-sep">—</span>'
-        f'<div class="dss-otp-slot">4</div>'
-        f'<div class="dss-otp-slot">5</div>'
-        f'<div class="dss-otp-slot">6</div>'
+        f'<div style="font-size:.76rem;color:#CBD5E1;line-height:1.45;margin-bottom:8px;">'
+        f"Ingrese el código numérico de <b>6 dígitos</b> enviado a su bandeja de entrada para verificar su identidad."
         f"</div>"
         f'<div class="dss-otp-meta">'
         f'<span>Canal cifrado <b>TLS · SMTP</b></span>'
