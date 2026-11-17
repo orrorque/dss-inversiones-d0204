@@ -99,116 +99,378 @@ def renderizar_panel_lateral(df_hist):
 
 def renderizar_modo_carteleria(df_resultados, df_inventario, df_hist, df_cobre):
     """
-    Modo Cartelería Digital (Wallboard TV / Sala de Control de Almacén):
-    - Oculta el menú lateral para ocupar el 100% del monitor.
-    - Muestra una barra superior fija con botón directo '✕ Salir de Modo Cartelería',
-      pausa/reanudación de carrusel y salto manual al siguiente calibre.
-    - Rota automáticamente cada 8 segundos por los 29 calibres mostrando su telemetría
-      en vivo, alertas de stockout y gráficos de mercado/demanda.
+    Modo Cartelería (monitor de planta / sala de control) con el mismo sistema visual del dashboard:
+    cabecera ejecutiva, KPIs globales, calibre en foco con rotación automática y salida en 1 clic.
     """
     st.markdown(
         """
         <style>
         [data-testid="stSidebar"] {display: none !important;}
         [data-testid="stHeader"] {display: none !important;}
-        .block-container {padding-top: 0.9rem !important; max-width: 98% !important;}
+        .block-container {padding-top: 0.8rem !important; max-width: 98% !important;}
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    calibres_lista = list(df_hist.columns)
-    total_cal = len(calibres_lista)
-    auto_activo = bool(st.session_state.get("carteleria_auto", True))
+    calibres = list(df_hist.columns)
+    total = len(calibres)
+    auto = bool(st.session_state.get("carteleria_auto", True))
+    intervalo = 8
+    st.session_state.setdefault("carteleria_idx", 0)
+    st.session_state.setdefault("carteleria_t", time.time())
 
-    # Barra de control superior para salir o controlar la cartelería en 1 clic
-    c_info, c_next, c_pause, c_exit = st.columns([3.2, 1.0, 1.1, 1.3], gap="small")
-    with c_info:
-        estado_rot = "Rotación automática activa (cada 8 s)" if auto_activo else "Rotación en pausa (modo fijo)"
-        st.html(
-            f'<div class="dss-wallboard-bar" style="margin-bottom:4px;padding:11px 16px;">'
-            f'<div class="dss-wallboard-left">'
-            f'<span class="dss-wallboard-badge"><span class="dss-dot-live"></span> MODO CARTELERÍA TV</span>'
-            f'<div>'
-            f'<div class="dss-wallboard-title">Monitor en Vivo de Planta y Almacén · Inversiones D-02-04</div>'
-            f'<div class="dss-wallboard-sub">{estado_rot} · Monitoreando {total_cal} calibres de cobre</div>'
-            f"</div></div></div>"
-        )
-    with c_next:
-        st.html("<div style='height:8px;'></div>")
-        if st.button("⏭ Siguiente calibre", key="btn_wb_next", use_container_width=True):
-            st.session_state["carteleria_idx"] = (int(st.session_state.get("carteleria_idx", 0)) + 1) % total_cal
-            st.rerun()
-    with c_pause:
-        st.html("<div style='height:8px;'></div>")
-        txt_pausa = "⏸ Pausar rotación" if auto_activo else "▶ Reanudar rotación"
-        if st.button(txt_pausa, key="btn_wb_pause", use_container_width=True):
-            st.session_state["carteleria_auto"] = not auto_activo
-            st.rerun()
-    with c_exit:
-        st.html("<div style='height:8px;'></div>")
-        if st.button("✕ Salir de Cartelería", key="btn_wb_exit", type="primary", use_container_width=True):
-            st.session_state["modo_carteleria"] = False
-            st.rerun()
+    def _ir_a(indice):
+        st.session_state["carteleria_idx"] = indice % total
+        st.session_state["carteleria_t"] = time.time()
+        st.rerun()
 
-    @st.fragment(run_every=8 if auto_activo else None)
-    def _carrusel_telemetria_vivo():
-        idx_actual = int(st.session_state.get("carteleria_idx", 0)) % total_cal
-        cal_foco = calibres_lista[idx_actual]
-        if auto_activo:
-            st.session_state["carteleria_idx"] = (idx_actual + 1) % total_cal
-
+    @st.fragment(run_every=1)
+    def _cabecera_cartelera():
         ahora_wb = datetime.now()
-        reloj_txt = f"{ahora_wb:%H:%M:%S}"
-        fecha_wb = f"{ahora_wb.day:02d} {MESES_ES[ahora_wb.month - 1]} {ahora_wb.year}"
-
-        fila_cal = df_resultados[df_resultados["Calibre"] == cal_foco]
-        row = fila_cal.iloc[0] if not fila_cal.empty else df_resultados.iloc[0]
-
-        stock_f = float(row.get("Stock Físico") or 0)
-        rop_f = float(row.get("Punto de Quiebre (ROP)") or 0)
-        ss_f = float(row.get("Stock Seguridad (SS)") or 0)
-        deficit_f = float(row.get("Déficit Quiebre (kg)") or max(0.0, rop_f - stock_f))
-        eoq_f = float(row.get("Sugerencia Compra (EOQ)") or 0)
-        inv_f = float(row.get("Inversión Orden ($)") or 0)
-        aut_f = float(row.get("Autonomía (Días)") or 0)
-        sal_proy = float(row.get("Salida Proy. Mes (kg)") or 0)
-        abc_f = str(row.get("Clasificación ABC") or "Clase A")
-        estatus_f = str(row.get("Estatus") or "CRÍTICO")
-        regimen_f = str(row.get("Régimen LME") or "Banda Neutral")
-
-        chip_est = chip("QUIEBRE CRÍTICO" if estatus_f == "CRÍTICO" else "ESTABLE", "danger" if estatus_f == "CRÍTICO" else "success")
-
         st.html(
-            f'<div class="dss-spotlight-card">'
-            f'<div class="dss-spotlight-head">'
-            f'<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">'
-            f'<div class="dss-spotlight-cal">{cal_foco}</div>'
-            f'{chip_est}'
-            f'{chip(abc_f, "info")}'
-            f'{chip(regimen_f, "copper")}'
-            f"</div>"
-            f'<div style="display:flex;align-items:center;gap:12px;">'
-            f'<span style="font-size:.75rem;color:#94A3B8;font-weight:600;">SKU {idx_actual + 1} de {total_cal} · {fecha_wb}</span>'
-            f'<span class="dss-wallboard-clock">🕒 {reloj_txt}</span>'
+            f'<div class="dss-topbar">'
+            f'<div class="dss-topbar-id">'
+            f'<div class="dss-logo-badge">{icono("escudo")}</div>'
+            f"<div>"
+            f'<div class="dss-topbar-eyebrow">Modo cartelería · Sala de control</div>'
+            f'<div class="dss-topbar-title">Monitor logístico en vivo</div>'
+            f'<div class="dss-topbar-sub">Inversiones D-02-04 · Inventario de cable de cobre · {total} calibres monitoreados</div>'
             f"</div>"
             f"</div>"
-            f'<div class="dss-spotlight-kpis">'
-            f'<div class="dss-spotlight-stat"><span>Stock Físico en Almacén</span><b>{stock_f:,.0f} kg</b><small>Disponible inmediato</small></div>'
-            f'<div class="dss-spotlight-stat"><span>Punto de Quiebre (ROP)</span><b style="color:#FBBF24;">{rop_f:,.1f} kg</b><small>Stock Seguridad: {ss_f:,.1f} kg</small></div>'
-            f'<div class="dss-spotlight-stat"><span>Déficit Operativo</span><b style="color:#FF6B6B;">-{deficit_f:,.1f} kg</b><small>Faltante bajo ROP</small></div>'
-            f'<div class="dss-spotlight-stat"><span>Autonomía Estimada</span><b style="color:#38BDF8;">{aut_f:,.1f} días</b><small>Salida proy.: {sal_proy:,.0f} kg/mes</small></div>'
-            f'<div class="dss-spotlight-stat"><span>Lote a Comprar (EOQ)</span><b style="color:#F8FAFC;">{eoq_f:,.1f} kg</b><small>Modelo Wilson + LME</small></div>'
-            f'<div class="dss-spotlight-stat"><span>Inversión Requerida</span><b style="color:#34D399;">${inv_f:,.2f}</b><small>Costo indexado LME</small></div>'
+            f'<div class="dss-topbar-meta">'
+            f'<span class="dss-live"><span class="dss-dot-live"></span> En vivo</span>'
+            f'<div class="dss-meta-item"><span>Hora</span><b>{ahora_wb:%H:%M:%S}</b></div>'
+            f'<div class="dss-meta-item"><span>Fecha</span>'
+            f"<b>{ahora_wb.day:02d} {MESES_ES[ahora_wb.month - 1]} {ahora_wb.year}</b></div>"
             f"</div>"
             f"</div>"
         )
 
-        renderizar_kpis_profesionales(df_resultados, df_cobre, df_hist)
-        renderizar_centro_alertas(df_resultados)
-        renderizar_inteligencia_mercado(df_inventario, df_hist, df_cobre, cal_foco)
+    _cabecera_cartelera()
 
-    _carrusel_telemetria_vivo()
+    with st.container(key="wb_toolbar"):
+        c_estado, c_prev, c_pausa, c_next, c_salir = st.columns(
+            [2.6, 0.9, 1.2, 0.9, 1.4], gap="small", vertical_alignment="center"
+        )
+        with c_estado:
+            st.html(
+                '<div class="dss-wb-estado">'
+                + chip(
+                    "Rotación automática · 8 s" if auto else "Vista fija · rotación en pausa",
+                    "success" if auto else "warning",
+                )
+                + f'<span class="dss-wb-estado-txt">{total} calibres monitoreados</span>'
+                + "</div>"
+            )
+        with c_prev:
+            if st.button("⏮ Atrás", key="wb_prev", width="stretch", help="Calibre anterior"):
+                _ir_a(int(st.session_state["carteleria_idx"]) - 1)
+        with c_pausa:
+            if st.button(
+                "▶ Reanudar" if not auto else "⏸ Pausar",
+                key="wb_pause",
+                width="stretch",
+                help="Detener o reanudar la rotación automática",
+            ):
+                st.session_state["carteleria_auto"] = not auto
+                st.session_state["carteleria_t"] = time.time()
+                st.rerun()
+        with c_next:
+            if st.button("⏭ Sig.", key="wb_next", width="stretch", help="Siguiente calibre"):
+                _ir_a(int(st.session_state["carteleria_idx"]) + 1)
+        with c_salir:
+            if st.button("✕ Salir", key="wb_exit", type="primary", width="stretch", help="Volver al dashboard completo"):
+                st.session_state["modo_carteleria"] = False
+                st.rerun()
+
+    criticos_all = df_resultados[df_resultados["Estatus"] == "CRÍTICO"]
+    deficit_total = float(criticos_all["Déficit Quiebre (kg)"].sum())
+    inversion_total = float(criticos_all["Inversión Orden ($)"].sum())
+    cobre_ult = float(df_cobre["Close"].iloc[-1])
+    cobre_var = cobre_ult - float(df_cobre["Close"].iloc[-2]) if len(df_cobre) > 1 else 0.0
+    ent_inv, dec_inv = _partir_decimal(inversion_total, 2)
+    ent_cu, dec_cu = _partir_decimal(cobre_ult, 2)
+    pie_cobre = (
+        chip(f"▲ {cobre_var:,.2f} USD", "success")
+        if cobre_var >= 0
+        else chip(f"▼ {abs(cobre_var):,.2f} USD", "danger")
+    )
+
+    seccion(
+        "Resumen global",
+        "Estado de inventario y mercado",
+        "Indicadores consolidados de los calibres de cobre y cotización internacional.",
+        lado_derecho=chip(
+            f"{len(criticos_all)} críticos",
+            "danger" if len(criticos_all) else "success",
+        ),
+    )
+    rejilla_kpis(
+        [
+            tarjeta_kpi(
+                "Líneas en quiebre",
+                f"{len(criticos_all)}",
+                unidad=f"de {total} SKUs",
+                icono_nombre="alerta",
+                acento="rojo",
+                pie=chip("Bajo punto de reorden", "danger" if len(criticos_all) else "success"),
+                nota="Modelo ROP · Wilson",
+            ),
+            tarjeta_kpi(
+                "Déficit agregado",
+                f"{deficit_total:,.1f}",
+                unidad="kg",
+                icono_nombre="autonomia",
+                acento="cyan",
+                pie=chip("Faltante total", "info"),
+                nota="Suma de déficit ROP",
+            ),
+            tarjeta_kpi(
+                "Inversión requerida",
+                f"${ent_inv}",
+                decimales=dec_inv,
+                icono_nombre="capital",
+                acento="cobre",
+                pie=chip("Indexado LME", "copper"),
+                nota="EOQ de líneas críticas",
+            ),
+            tarjeta_kpi(
+                "Cobre global · LME",
+                f"${ent_cu}",
+                decimales=dec_cu,
+                unidad="/t",
+                icono_nombre="cobre",
+                acento="verde",
+                pie=pie_cobre,
+                nota="USD / tonelada",
+                spark=sparkline(df_cobre["Close"].tail(16).tolist(), PALETA["cobre"], uid="wb_cobre"),
+            ),
+        ]
+    )
+
+    @st.fragment(run_every=intervalo if auto else None)
+    def _foco_calibre():
+        i = int(st.session_state.get("carteleria_idx", 0)) % total
+        if auto and time.time() - float(st.session_state.get("carteleria_t", 0.0)) >= intervalo - 0.6:
+            i = (i + 1) % total
+            st.session_state["carteleria_idx"] = i
+            st.session_state["carteleria_t"] = time.time()
+
+        cal = calibres[i]
+        fila = df_resultados[df_resultados["Calibre"] == cal]
+        row = fila.iloc[0] if not fila.empty else df_resultados.iloc[0]
+
+        stock = float(row["Stock Físico"])
+        rop = float(row["Punto de Quiebre (ROP)"])
+        ss = float(row.get("Stock Seguridad (SS)") or 0.0)
+        deficit = float(row.get("Déficit Quiebre (kg)") or 0.0)
+        holgura = float(row.get("Holgura ROP (kg)") or 0.0)
+        cobertura = float(row.get("Cobertura ROP (%)") or 0.0)
+        eoq = float(row.get("Sugerencia Compra (EOQ)") or 0.0)
+        inv = float(row.get("Inversión Orden ($)") or 0.0)
+        aut = float(row.get("Autonomía (Días)") or 0.0)
+        sal_proy = float(row.get("Salida Proy. Mes (kg)") or 0.0)
+        sal_ult = float(row.get("Salida Últ. Mes (kg)") or 0.0)
+        var_sal = float(row.get("Var. Salida (%)") or 0.0)
+        abc = str(row.get("Clasificación ABC") or "—")
+        regimen = str(row.get("Régimen LME") or "—")
+        es_crit = str(row.get("Estatus")) == "CRÍTICO"
+
+        pastillas = []
+        for k, nombre in enumerate(calibres):
+            fk = df_resultados[df_resultados["Calibre"] == nombre]
+            clase = "ok"
+            if not fk.empty:
+                rk = fk.iloc[0]
+                rop_k = float(rk["Punto de Quiebre (ROP)"])
+                if rk["Estatus"] == "CRÍTICO":
+                    clase = "crit"
+                elif rop_k > 0 and float(rk["Stock Físico"]) <= rop_k * 1.15:
+                    clase = "obs"
+            activo = " is-active" if k == i else ""
+            etiqueta_pill = nombre.replace(" AWG", "")
+            pastillas.append(f'<span class="dss-wb-pill dss-wb-pill--{clase}{activo}">{etiqueta_pill}</span>')
+
+        clase_barra = "dss-wb-progress-fill" + ("" if auto else " dss-wb-progress-fill--static")
+        estilo_barra = f"animation-duration:{intervalo}s;" if auto else ""
+        st.html(
+            f'<div class="dss-wb-strip">{"".join(pastillas)}</div>'
+            f'<div class="dss-wb-progress"><div class="{clase_barra}" style="{estilo_barra}"></div></div>'
+        )
+
+        seccion(
+            f"Calibre en foco · {i + 1} de {total}",
+            cal,
+            f"Telemetría en vivo de {cal}: stock, punto de quiebre, lote óptimo y pronóstico de salidas.",
+            lado_derecho=chip(
+                "Quiebre crítico" if es_crit else "Stock estable",
+                "danger" if es_crit else "success",
+            )
+            + chip(abc, "info"),
+        )
+
+        rejilla_kpis(
+            [
+                tarjeta_kpi(
+                    "Stock físico",
+                    f"{stock:,.0f}",
+                    unidad="kg",
+                    icono_nombre="capital",
+                    acento="cobre",
+                    pie=chip(f"Cobertura ROP {cobertura:,.0f}%", "danger" if es_crit else "success"),
+                    nota=f"Stock de seguridad {ss:,.1f} kg",
+                ),
+                tarjeta_kpi(
+                    "Punto de quiebre (ROP)",
+                    f"{rop:,.1f}",
+                    unidad="kg",
+                    icono_nombre="autonomia",
+                    acento="cyan",
+                    pie=(
+                        chip(f"Déficit {deficit:,.1f} kg", "danger")
+                        if deficit > 0
+                        else chip(f"Holgura {holgura:,.1f} kg", "success")
+                    ),
+                    nota=f"Autonomía {aut:,.1f} días",
+                    spark=sparkline(
+                        df_hist[cal].tail(12).tolist(), PALETA["cyan"], uid=f"wb_rop_{i}"
+                    ),
+                ),
+                tarjeta_kpi(
+                    "Lote sugerido (EOQ)",
+                    f"{eoq:,.1f}",
+                    unidad="kg",
+                    icono_nombre="tabla",
+                    acento="verde",
+                    pie=chip(f"${inv:,.2f} USD", "copper"),
+                    nota=f"Régimen LME · {regimen}",
+                ),
+                tarjeta_kpi(
+                    "Salida proyectada",
+                    f"{sal_proy:,.0f}",
+                    unidad="kg/mes",
+                    icono_nombre="ventas",
+                    acento="cobre",
+                    pie=chip(
+                        f"{var_sal:+.1f}% vs último mes",
+                        "success" if var_sal <= 0 else "warning",
+                    ),
+                    nota=f"Último mes {sal_ult:,.0f} kg",
+                    spark=sparkline(
+                        df_hist[cal].tail(12).tolist(), "#A78BFA", uid=f"wb_sal_{i}"
+                    ),
+                ),
+            ]
+        )
+
+        col_a, col_b = st.columns(2, gap="medium")
+        with col_a:
+            with st.container(key="card_wb_demanda"):
+                hist_data = df_hist[cal]
+                pronostico = pronosticar_serie(hist_data, 1)
+                fecha_futura = hist_data.index[-1] + pd.DateOffset(months=1)
+                st.html(
+                    _cabecera_grafica(
+                        "Demanda mensual",
+                        f"Pronóstico de salidas · {cal}",
+                        "Histórico de salidas y proyección del próximo periodo",
+                        "1 mes",
+                        "info",
+                    )
+                )
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Scatter(
+                        x=hist_data.index,
+                        y=hist_data.values,
+                        mode="lines+markers",
+                        name="Histórico",
+                        line=dict(color=PALETA["cyan"], width=2.6),
+                        marker=dict(size=5, color=PALETA["cyan"], line=dict(width=1.5, color="#0B1424")),
+                        fill="tozeroy",
+                        fillcolor="rgba(76,201,240,0.08)",
+                        hovertemplate="<b>%{y:,.0f} kg</b><br>%{x|%b %Y}<extra>Histórico</extra>",
+                    )
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=[hist_data.index[-1], fecha_futura],
+                        y=[hist_data.values[-1], pronostico.values[0]],
+                        mode="lines+markers",
+                        name="Proyección",
+                        line=dict(color=PALETA["cobre"], width=2.6, dash="dash"),
+                        marker=dict(
+                            size=[2, 9],
+                            symbol="diamond",
+                            color=PALETA["cobre"],
+                            line=dict(width=2, color="#0B1424"),
+                        ),
+                        hovertemplate="<b>%{y:,.0f} kg</b><br>%{x|%b %Y}<extra>Proyección</extra>",
+                    )
+                )
+                estilizar_figura(fig, alto=280, fecha=True)
+                st.plotly_chart(fig, width="stretch", theme=None, config=PLOTLY_CONFIG)
+
+        with col_b:
+            with st.container(key="card_wb_niveles"):
+                st.html(
+                    _cabecera_grafica(
+                        "Niveles de inventario",
+                        f"Stock vs ROP · {cal}",
+                        "Posición física frente al punto de quiebre y al stock de seguridad",
+                        "kg",
+                        "danger" if es_crit else "success",
+                    )
+                )
+                categorias = ["Stock físico", "Punto de quiebre", "Stock seguridad"]
+                valores = [stock, rop, ss]
+                colores = [
+                    PALETA["rojo"] if es_crit else PALETA["verde"],
+                    PALETA["cyan"],
+                    "#A78BFA",
+                ]
+                fig2 = go.Figure(
+                    go.Bar(
+                        x=categorias,
+                        y=valores,
+                        marker=dict(color=colores, line=dict(width=0)),
+                        text=[f"{v:,.1f} kg" for v in valores],
+                        textposition="outside",
+                        hovertemplate="<b>%{y:,.1f} kg</b><extra>%{x}</extra>",
+                    )
+                )
+                estilizar_figura(fig2, alto=280, leyenda=False, hovermode="x")
+                st.plotly_chart(fig2, width="stretch", theme=None, config=PLOTLY_CONFIG)
+
+        criticos = df_resultados[df_resultados["Estatus"] == "CRÍTICO"].copy()
+        if criticos.empty:
+            st.html(
+                '<div class="dss-alert dss-alert--ok"><div class="dss-ok-wrap">'
+                f'<div class="dss-ok-icon">{icono("check")}</div>'
+                "<div><div class=\"dss-ok-title\">Monitoreo logístico estable</div>"
+                '<div class="dss-ok-sub">Todos los calibres se encuentran dentro de los parámetros de seguridad.</div></div>'
+                f'<div class="dss-ok-side">{chip("Sin alertas activas", "success")}</div>'
+                "</div></div>"
+            )
+        else:
+            criticos = criticos.assign(
+                _deficit=criticos["Punto de Quiebre (ROP)"] - criticos["Stock Físico"]
+            ).sort_values("_deficit", ascending=False)
+            items = "".join(_tarjeta_alerta(r, "crit") for _, r in criticos.iterrows())
+            st.html(
+                '<div class="dss-alert dss-alert--critical">'
+                '<div class="dss-alert-head"><div class="dss-alert-heading">'
+                f'<span class="dss-alert-icon">{icono("alerta")}</span>'
+                "<div>"
+                '<div class="dss-alert-kicker">Monitoreo de stockout en tiempo real</div>'
+                f'<div class="dss-alert-title">Alerta de quiebre de stock · {len(criticos)} calibres críticos</div>'
+                "</div></div></div>"
+                f"{_ticker(items, len(criticos))}"
+                "</div>"
+            )
+
+    _foco_calibre()
 
 
 # ---------------------------------------------------------------------------
