@@ -33,7 +33,8 @@ from modules.ui_components import (renderizar_panel_lateral, generar_matriz_deci
                                    renderizar_centro_alertas, renderizar_kpis_profesionales,
                                    renderizar_inteligencia_mercado, renderizar_panel_acciones,
                                    renderizar_cabecera, renderizar_aviso_operador,
-                                   renderizar_estado_backend, renderizar_consola_admin)
+                                   renderizar_estado_backend, renderizar_consola_admin,
+                                   renderizar_modo_carteleria)
 
 st.set_page_config(
     page_title="DSS · Inversiones D-02-04",
@@ -71,20 +72,24 @@ else:
         # 3. Ejecución de Alertas en Segundo Plano
         procesar_alertas_automaticas(df_resultados)
 
-        # 4. Renderizado Condicional de Interfaz según el Rol
+        # 4. Renderizado Condicional de Interfaz según el Rol y Modo Cartelería
         calibre_sel = renderizar_panel_lateral(df_hist)
         renderizar_perfil_usuario()
-        renderizar_cabecera()
-        renderizar_estado_backend()
 
-        renderizar_centro_alertas(df_resultados)
-
-        if st.session_state['rol'] == "Gerencia":
-            # Acceso total corporativo
-            renderizar_kpis_profesionales(df_resultados, df_cobre, df_hist)
-            renderizar_inteligencia_mercado(df_inventario, df_hist, df_cobre, calibre_sel)
-            renderizar_panel_acciones(df_resultados)
+        if st.session_state.get("modo_carteleria"):
+            renderizar_modo_carteleria(df_resultados, df_inventario, df_hist, df_cobre)
         else:
-            # Vista restringida para Operaciones (Solo Ejecución)
-            renderizar_aviso_operador()
-            renderizar_panel_acciones(df_resultados)
+            renderizar_cabecera()
+            renderizar_estado_backend()
+
+            renderizar_centro_alertas(df_resultados)
+
+            if st.session_state['rol'] == "Gerencia":
+                # Acceso total corporativo
+                renderizar_kpis_profesionales(df_resultados, df_cobre, df_hist)
+                renderizar_inteligencia_mercado(df_inventario, df_hist, df_cobre, calibre_sel)
+                renderizar_panel_acciones(df_resultados)
+            else:
+                # Vista restringida para Operaciones (Solo Ejecución)
+                renderizar_aviso_operador()
+                renderizar_panel_acciones(df_resultados)

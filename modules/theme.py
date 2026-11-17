@@ -1364,6 +1364,76 @@ h1,h2,h3,h4,h5,h6{ color:#F4F8FE; letter-spacing:-.02em; font-weight:700; }
   color:rgba(148, 163, 184, .28) !important;
   letter-spacing:.55em !important;
 }
+
+/* ---------------- Modo Cartelería Digital (Wallboard TV / Planta) ---------------- */
+.dss-wallboard-bar{
+  background:linear-gradient(90deg, #16243B 0%, #0F1A2C 55%, #1A2842 100%);
+  border:1px solid rgba(56, 189, 248, .42);
+  border-radius:16px;
+  padding:14px 20px;
+  margin-bottom:14px;
+  display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap;
+  box-shadow:0 20px 44px -24px rgba(14, 165, 233, .45);
+}
+.dss-wallboard-left{
+  display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+}
+.dss-wallboard-badge{
+  display:inline-flex; align-items:center; gap:8px;
+  padding:6px 13px; border-radius:999px;
+  background:rgba(56, 189, 248, .15); border:1px solid rgba(56, 189, 248, .45);
+  color:#7DD3FC; font-size:.7rem; font-weight:800; letter-spacing:.11em; text-transform:uppercase;
+}
+.dss-wallboard-title{
+  font-size:1.02rem; font-weight:800; color:#F8FAFC; letter-spacing:-.01em;
+}
+.dss-wallboard-sub{
+  font-size:.74rem; color:#93C5FD; margin-top:2px;
+}
+.dss-wallboard-clock{
+  font-family:"JetBrains Mono", monospace;
+  font-size:1.15rem; font-weight:800; color:#F2B45C;
+  padding:6px 14px; border-radius:10px;
+  background:#09111E; border:1px solid rgba(242, 180, 92, .35);
+  font-variant-numeric:tabular-nums;
+}
+.dss-spotlight-card{
+  background:linear-gradient(155deg, #16263E 0%, #0F1A2C 100%);
+  border:1px solid rgba(56, 189, 248, .38);
+  border-radius:18px; padding:20px 22px;
+  margin:10px 0 16px;
+  box-shadow:0 24px 48px -28px rgba(0,0,0,.9);
+}
+.dss-spotlight-head{
+  display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;
+  padding-bottom:14px; margin-bottom:16px;
+  border-bottom:1px solid rgba(148, 163, 184, .18);
+}
+.dss-spotlight-cal{
+  font-size:1.85rem; font-weight:900; color:#F8FAFC; letter-spacing:-.03em; line-height:1.05;
+}
+.dss-spotlight-kpis{
+  display:grid; grid-template-columns:repeat(6, minmax(0, 1fr)); gap:12px;
+}
+@media (max-width:1100px){
+  .dss-spotlight-kpis{ grid-template-columns:repeat(3, minmax(0, 1fr)); }
+}
+.dss-spotlight-stat{
+  background:#0B1322; border:1px solid rgba(148, 163, 184, .2);
+  border-radius:12px; padding:12px 14px;
+  display:flex; flex-direction:column; gap:4px;
+}
+.dss-spotlight-stat span{
+  font-size:.6rem; text-transform:uppercase; letter-spacing:.09em;
+  color:#93C5FD; font-weight:700;
+}
+.dss-spotlight-stat b{
+  font-size:1.22rem; font-weight:800; color:#F8FAFC;
+  font-variant-numeric:tabular-nums;
+}
+.dss-spotlight-stat small{
+  font-size:.68rem; color:#94A3B8;
+}
 .dss-auth-foot{
   text-align:center; font-size:.66rem; color:var(--dss-faint);
   margin-top:14px; line-height:1.6;

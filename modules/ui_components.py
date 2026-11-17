@@ -74,6 +74,10 @@ def renderizar_panel_lateral(df_hist):
             )
             return None
 
+        st.session_state.setdefault("modo_carteleria", False)
+        st.session_state.setdefault("carteleria_auto", True)
+        st.session_state.setdefault("carteleria_idx", 0)
+
         st.html('<div class="dss-side-label">Filtro de análisis</div>')
         calibre_sel = st.selectbox(
             "Calibre de mercado",
@@ -81,24 +85,130 @@ def renderizar_panel_lateral(df_hist):
             help="Selecciona el calibre para el pronóstico de demanda y salidas.",
         )
 
-        modo_carteleria = st.toggle(
-            "Modo cartelería",
-            help="Activa la recarga automática para pantallas de almacén.",
+        activar_carteleria = st.toggle(
+            "📺 Modo cartelería (TV)",
+            value=bool(st.session_state.get("modo_carteleria", False)),
+            help="Activa el Wallboard de pantalla completa con rotación automática de calibres para monitores de planta.",
         )
-        if modo_carteleria:
-            st.markdown(
-                """
-                <style>
-                [data-testid="stSidebar"] {display: none;}
-                [data-testid="stHeader"] {display: none;}
-                .block-container {padding-top: 1rem !important;}
-                </style>
-                <meta http-equiv="refresh" content="60">
-                """,
-                unsafe_allow_html=True,
-            )
+        if activar_carteleria != bool(st.session_state.get("modo_carteleria", False)):
+            st.session_state["modo_carteleria"] = activar_carteleria
+            st.rerun()
 
     return calibre_sel
+
+
+def renderizar_modo_carteleria(df_resultados, df_inventario, df_hist, df_cobre):
+    """
+    Modo Cartelería Digital (Wallboard TV / Sala de Control de Almacén):
+    - Oculta el menú lateral para ocupar el 100% del monitor.
+    - Muestra una barra superior fija con botón directo '✕ Salir de Modo Cartelería',
+      pausa/reanudación de carrusel y salto manual al siguiente calibre.
+    - Rota automáticamente cada 8 segundos por los 29 calibres mostrando su telemetría
+      en vivo, alertas de stockout y gráficos de mercado/demanda.
+    """
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] {display: none !important;}
+        [data-testid="stHeader"] {display: none !important;}
+        .block-container {padding-top: 0.9rem !important; max-width: 98% !important;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    calibres_lista = list(df_hist.columns)
+    total_cal = len(calibres_lista)
+    auto_activo = bool(st.session_state.get("carteleria_auto", True))
+
+    # Barra de control superior para salir o controlar la cartelería en 1 clic
+    c_info, c_next, c_pause, c_exit = st.columns([3.2, 1.0, 1.1, 1.3], gap="small")
+    with c_info:
+        estado_rot = "Rotación automática activa (cada 8 s)" if auto_activo else "Rotación en pausa (modo fijo)"
+        st.html(
+            f'<div class="dss-wallboard-bar" style="margin-bottom:4px;padding:11px 16px;">'
+            f'<div class="dss-wallboard-left">'
+            f'<span class="dss-wallboard-badge"><span class="dss-dot-live"></span> MODO CARTELERÍA TV</span>'
+            f'<div>'
+            f'<div class="dss-wallboard-title">Monitor en Vivo de Planta y Almacén · Inversiones D-02-04</div>'
+            f'<div class="dss-wallboard-sub">{estado_rot} · Monitoreando {total_cal} calibres de cobre</div>'
+            f"</div></div></div>"
+        )
+    with c_next:
+        st.html("<div style='height:8px;'></div>")
+        if st.button("⏭ Siguiente calibre", key="btn_wb_next", use_container_width=True):
+            st.session_state["carteleria_idx"] = (int(st.session_state.get("carteleria_idx", 0)) + 1) % total_cal
+            st.rerun()
+    with c_pause:
+        st.html("<div style='height:8px;'></div>")
+        txt_pausa = "⏸ Pausar rotación" if auto_activo else "▶ Reanudar rotación"
+        if st.button(txt_pausa, key="btn_wb_pause", use_container_width=True):
+            st.session_state["carteleria_auto"] = not auto_activo
+            st.rerun()
+    with c_exit:
+        st.html("<div style='height:8px;'></div>")
+        if st.button("✕ Salir de Cartelería", key="btn_wb_exit", type="primary", use_container_width=True):
+            st.session_state["modo_carteleria"] = False
+            st.rerun()
+
+    @st.fragment(run_every=8 if auto_activo else None)
+    def _carrusel_telemetria_vivo():
+        idx_actual = int(st.session_state.get("carteleria_idx", 0)) % total_cal
+        cal_foco = calibres_lista[idx_actual]
+        if auto_activo:
+            st.session_state["carteleria_idx"] = (idx_actual + 1) % total_cal
+
+        ahora_wb = datetime.now()
+        reloj_txt = f"{ahora_wb:%H:%M:%S}"
+        fecha_wb = f"{ahora_wb.day:02d} {MESES_ES[ahora_wb.month - 1]} {ahora_wb.year}"
+
+        fila_cal = df_resultados[df_resultados["Calibre"] == cal_foco]
+        row = fila_cal.iloc[0] if not fila_cal.empty else df_resultados.iloc[0]
+
+        stock_f = float(row.get("Stock Físico") or 0)
+        rop_f = float(row.get("Punto de Quiebre (ROP)") or 0)
+        ss_f = float(row.get("Stock Seguridad (SS)") or 0)
+        deficit_f = float(row.get("Déficit Quiebre (kg)") or max(0.0, rop_f - stock_f))
+        eoq_f = float(row.get("Sugerencia Compra (EOQ)") or 0)
+        inv_f = float(row.get("Inversión Orden ($)") or 0)
+        aut_f = float(row.get("Autonomía (Días)") or 0)
+        sal_proy = float(row.get("Salida Proy. Mes (kg)") or 0)
+        abc_f = str(row.get("Clasificación ABC") or "Clase A")
+        estatus_f = str(row.get("Estatus") or "CRÍTICO")
+        regimen_f = str(row.get("Régimen LME") or "Banda Neutral")
+
+        chip_est = chip("QUIEBRE CRÍTICO" if estatus_f == "CRÍTICO" else "ESTABLE", "danger" if estatus_f == "CRÍTICO" else "success")
+
+        st.html(
+            f'<div class="dss-spotlight-card">'
+            f'<div class="dss-spotlight-head">'
+            f'<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">'
+            f'<div class="dss-spotlight-cal">{cal_foco}</div>'
+            f'{chip_est}'
+            f'{chip(abc_f, "info")}'
+            f'{chip(regimen_f, "copper")}'
+            f"</div>"
+            f'<div style="display:flex;align-items:center;gap:12px;">'
+            f'<span style="font-size:.75rem;color:#94A3B8;font-weight:600;">SKU {idx_actual + 1} de {total_cal} · {fecha_wb}</span>'
+            f'<span class="dss-wallboard-clock">🕒 {reloj_txt}</span>'
+            f"</div>"
+            f"</div>"
+            f'<div class="dss-spotlight-kpis">'
+            f'<div class="dss-spotlight-stat"><span>Stock Físico en Almacén</span><b>{stock_f:,.0f} kg</b><small>Disponible inmediato</small></div>'
+            f'<div class="dss-spotlight-stat"><span>Punto de Quiebre (ROP)</span><b style="color:#FBBF24;">{rop_f:,.1f} kg</b><small>Stock Seguridad: {ss_f:,.1f} kg</small></div>'
+            f'<div class="dss-spotlight-stat"><span>Déficit Operativo</span><b style="color:#FF6B6B;">-{deficit_f:,.1f} kg</b><small>Faltante bajo ROP</small></div>'
+            f'<div class="dss-spotlight-stat"><span>Autonomía Estimada</span><b style="color:#38BDF8;">{aut_f:,.1f} días</b><small>Salida proy.: {sal_proy:,.0f} kg/mes</small></div>'
+            f'<div class="dss-spotlight-stat"><span>Lote a Comprar (EOQ)</span><b style="color:#F8FAFC;">{eoq_f:,.1f} kg</b><small>Modelo Wilson + LME</small></div>'
+            f'<div class="dss-spotlight-stat"><span>Inversión Requerida</span><b style="color:#34D399;">${inv_f:,.2f}</b><small>Costo indexado LME</small></div>'
+            f"</div>"
+            f"</div>"
+        )
+
+        renderizar_kpis_profesionales(df_resultados, df_cobre, df_hist)
+        renderizar_centro_alertas(df_resultados)
+        renderizar_inteligencia_mercado(df_inventario, df_hist, df_cobre, cal_foco)
+
+    _carrusel_telemetria_vivo()
 
 
 # ---------------------------------------------------------------------------
